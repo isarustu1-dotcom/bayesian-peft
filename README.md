@@ -8,8 +8,8 @@ This repo contains the code for the following works:
 
 - **Training-Free Bayesianization for Low-Rank Adapters of Large Language Models**  
   Haizhou Shi\*, Yibin Wang\*, Ligong Han, Huan Zhang, Hao Wang  
-  *ICLR Workshop: Quantify Uncertainty and Hallucination in Foundation Models, 2025*  
-  [[📄 Paper](https://arxiv.org/abs/2412.05723)] [[🌐 OpenReview](https://openreview.net/forum?id=KlTOctRctg)]
+  *Thirty-ninth Conference on Neural Information Processing Systems, 2025*  
+  [[📄 Paper](https://arxiv.org/abs/2412.05723)] [[🌐 OpenReview](https://openreview.net/forum?id=KlTOctRctg)] [[📑 Slides](https://neurips.cc/media/neurips-2025/Slides/116513.pdf)] [[🖼️ Poster](https://neurips.cc/media/PosterPDFs/NeurIPS%202025/116513.png)]
 
 
 
@@ -125,9 +125,21 @@ For more information about the `WrapperBase` class, refer to the code provided i
 [BLoB: Bayesian Low-Rank Adaptation by Backpropagation for Large Language Models](https://arxiv.org/abs/2406.11675)
 ```bib
 @article{wang2024blob,
-  title={BLoB: Bayesian Low-Rank Adaptation by Backpropagation for Large Language Models},
+  title={Blob: Bayesian low-rank adaptation by backpropagation for large language models},
   author={Wang, Yibin and Shi, Haizhou and Han, Ligong and Metaxas, Dimitris and Wang, Hao},
-  journal={arXiv preprint arXiv:2406.11675},
+  journal={Advances in Neural Information Processing Systems},
+  volume={37},
+  pages={67758--67794},
+  year={2024}
+}
+```
+
+[Training-Free Bayesianization for Low-Rank Adapters of Large Language Models](https://arxiv.org/abs/2412.05723)
+```bib
+@article{shi2024training,
+  title={Training-free bayesianization for low-rank adapters of large language models},
+  author={Shi, Haizhou and Wang, Yibin and Han, Ligong and Zhang, Huan and Wang, Hao},
+  journal={arXiv preprint arXiv:2412.05723},
   year={2024}
 }
 ```
