@@ -158,6 +158,11 @@ def blob_8bitlinear_forward(self, x: torch.Tensor, *args: Any, **kwargs: Any):
         result = self.base_layer(x, *args, **kwargs)
     else:
         result = self.base_layer(x, *args, **kwargs)
+        # Base Linear8bitLt can return a view of a custom-autograd output; any
+        # in-place op on it ("result += ...") raises
+        # "A view was created in no_grad mode and is being modified inplace with
+        # grad mode enabled". Clone once so subsequent adds are safe.
+        result = result.clone()
         for active_adapter in self.active_adapters:
             if active_adapter not in self.lora_A.keys():
                 continue
@@ -176,7 +181,7 @@ def blob_8bitlinear_forward(self, x: torch.Tensor, *args: Any, **kwargs: Any):
             if requires_conversion:
                 output = output.to(expected_dtype)
             output = output * scaling
-            result += output
+            result = result + output
     if self.blobsample:
         for active_adapter in self.active_adapters:
             if active_adapter not in self.lora_A.keys():
@@ -245,7 +250,7 @@ def blob_8bitlinear_forward(self, x: torch.Tensor, *args: Any, **kwargs: Any):
             if requires_conversion:
                 noise = noise.to(expected_dtype)
 
-            result += noise * scaling
+            result = result + noise * scaling
 
     return result
 
