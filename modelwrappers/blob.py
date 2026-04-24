@@ -618,6 +618,9 @@ class BLoB(WrapperBase):
         Prepare the model for training and evaluation.
         """
         self.wandb_logger = wandb_logger
+        # Keep a reference to the raw dataset so the prediction-dump helper
+        # can reach unprepared val/test loaders and per-split helpers.
+        self._ib_edl_dataset = dataset
         train_loader, test_loader = dataset.train_dataloader, dataset.test_dataloader
 
         if self.args.dataset_type == "mcdataset":

@@ -29,7 +29,11 @@ class CausalLM(nn.Module):
             model = AutoModelForCausalLM.from_pretrained(
                 args.model, quantization_config=bnb_config
             )
-        if args.apply_classhead_lora:
+        # Explicit override wins (used by the asymmetric-duos integration to
+        # match the [q,k,v,o] LoRA geometry of that project).
+        if getattr(args, "lora_target_modules", None):
+            target_modules = list(args.lora_target_modules)
+        elif args.apply_classhead_lora:
             target_modules = ["q_proj", "v_proj", "lm_head"]
         elif args.apply_qkv_head_lora:
             target_modules = ["q_proj", "v_proj", "k_proj", "lm_head"]

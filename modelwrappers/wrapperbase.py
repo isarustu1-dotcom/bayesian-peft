@@ -4,9 +4,12 @@
 # LICENSE file in the root directory of this source tree.
 
 import logging
+import os
+import os.path as osp
 from contextlib import suppress
 from tqdm import tqdm
 import math
+import numpy as np
 import torch
 from torch.optim import SGD, Adam, AdamW
 from torch.optim.lr_scheduler import LambdaLR
@@ -357,6 +360,139 @@ class WrapperBase(PeftModel):
                     }
                 )
 
+        # asymmetric-duos integration: dump per-sample logits so downstream
+        # duo / deep-ensemble code in the ib_edl repo can consume them.
+        if (
+            getattr(self.args, "results_root", None) is not None
+            and getattr(self.args, "model_role", None) is not None
+        ):
+            self._dump_asymmetric_duos_predictions()
+
+    # ------------------------------------------------------------------
+    # asymmetric-duos: per-sample logits + npz dump
+    # ------------------------------------------------------------------
+    @torch.no_grad()
+    def evaluate_per_sample(self, eval_loader):
+        """Runs the (MC-sampled) forward pass and returns raw per-sample logits.
+
+        Returns
+        -------
+        logits : np.ndarray, shape (N, n_samples, C), float32
+        labels : np.ndarray, shape (N,), int64
+        """
+        self.eval()
+        status = self.training
+
+        sample_kwargs = dict(n_samples=self.eval_n_samples)
+        # BLoB honours --bayes-inference-notsample; plain wrapper has no such flag.
+        if hasattr(self.args, "bayes_inference_notsample"):
+            sample_kwargs["sample"] = not self.args.bayes_inference_notsample
+        else:
+            sample_kwargs["sample"] = True
+
+        all_logits = []
+        all_labels = []
+        samples_seen = 0
+        for step, batch in enumerate(eval_loader):
+            with torch.inference_mode():
+                logits = self.forward_logits(batch, **sample_kwargs).detach()
+                if self.args.dataset_type == "mcdataset":
+                    _, labels, _ = batch
+                else:
+                    labels = batch["labels"]
+                logits, labels = self.accelerator.gather([logits, labels])
+                if self.accelerator.num_processes > 1:
+                    if step == len(eval_loader) - 1:
+                        labels = labels[: len(eval_loader.dataset) - samples_seen]
+                        logits = logits[: len(eval_loader.dataset) - samples_seen]
+                    else:
+                        samples_seen += labels.shape[0]
+            all_logits.append(logits.float().cpu().numpy())
+            all_labels.append(labels.cpu().numpy())
+
+        self.train(status)
+        return (
+            np.concatenate(all_logits, axis=0).astype(np.float32),  # (N, n_samples, C)
+            np.concatenate(all_labels, axis=0).astype(np.int64),     # (N,)
+        )
+
+    def _dump_asymmetric_duos_predictions(self):
+        """Write $results_root/blob/<role>/{val,test}_preds/<dataset>.npz.
+
+        Schema matches ib_edl.utils.misc.save_predictions:
+            { str(seed): {
+                'idx':         np.int32[N],
+                'input':       np.array(strings)[N],
+                'logits':      np.float32[N, n_samples, C],
+                'true_labels': np.int64[N],
+            }}
+        Existing seed entries in the file are preserved (updated in-place).
+        """
+        if not self.accelerator.is_local_main_process:
+            # Non-main ranks still participate in forward / gather; the write
+            # itself is single-rank. We still need to run evaluate_per_sample
+            # on every rank for collective communication, so the skip below
+            # is only around the filesystem write.
+            pass
+
+        results_root = self.args.results_root
+        role = self.args.model_role
+        dataset_name = self.args.dataset
+        seed = int(self.args.seed)
+
+        dataset = self._ib_edl_dataset  # set in prepare_for_fit_evaluate
+
+        def _write_split(split_name: str, loader, out_subdir: str):
+            prepared_loader = self.accelerator.prepare(loader)
+            logits, labels = self.evaluate_per_sample(prepared_loader)
+
+            if not self.accelerator.is_local_main_process:
+                return
+
+            idx = np.array(dataset.get_data_indices(split_name)).astype(np.int32)
+            input_text = np.array(dataset.get_input_text(split_name))
+
+            # Defensive truncation: gather() padding should already be handled
+            # in evaluate_per_sample, but if drop_last or unexpected padding
+            # leaves an over/undersized array, align to whichever is shorter.
+            n = min(len(idx), logits.shape[0], labels.shape[0], len(input_text))
+            idx = idx[:n]
+            input_text = input_text[:n]
+            logits = logits[:n]
+            labels = labels[:n]
+
+            out_dir = osp.join(results_root, "blob", role, out_subdir)
+            os.makedirs(out_dir, exist_ok=True)
+            file_path = osp.join(out_dir, f"{dataset_name}.npz")
+
+            if osp.exists(file_path):
+                existing = dict(np.load(file_path, allow_pickle=True))
+            else:
+                existing = {}
+
+            existing[str(seed)] = {
+                "idx": idx,
+                "input": input_text,
+                "logits": logits.astype(np.float32),
+                "true_labels": labels,
+            }
+            np.savez_compressed(file_path, **existing)
+            logging.info(
+                f"[asymmetric-duos] wrote {split_name} predictions "
+                f"seed={seed} shape={logits.shape} -> {file_path}"
+            )
+
+        if getattr(self.args, "dump_val_predictions", False):
+            if hasattr(dataset, "val_dataloader"):
+                _write_split("val", dataset.val_dataloader, "val_preds")
+            else:
+                logging.warning(
+                    "[asymmetric-duos] --dump-val-predictions set but dataset "
+                    "has no val_dataloader; skipping val dump."
+                )
+
+        _write_split("test", dataset.test_dataloader, "test_preds")
+
     def prepare_for_fit_evaluate(self, dataset, wandb_logger=None):
         """Prepares the model and data loaders for training and evaluation.
     
@@ -365,8 +501,11 @@ class WrapperBase(PeftModel):
             wandb_logger (optional): The Weights & Biases logger for tracking experiments.
         """
         self.wandb_logger = wandb_logger
+        # Keep a reference to the raw dataset so prediction-dump code can reach
+        # unprepared val/test loaders and per-split index/input-text helpers.
+        self._ib_edl_dataset = dataset
         train_loader, test_loader = dataset.train_dataloader, dataset.test_dataloader
-        
+
         if self.args.testing_set == 'train_train_val' or self.args.testing_set == 'train_val_val':
             anchor_loader = dataset.anchor_dataloader
             anchor_loader = self.accelerator.prepare(anchor_loader)

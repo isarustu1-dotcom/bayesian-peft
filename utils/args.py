@@ -219,6 +219,39 @@ def add_experiment_args(parser: ArgumentParser) -> None:
         action="store_true",
         help="Apply LoRA on the query, key, value layers, and the language modeling head of the model.",
     )
+    parser.add_argument(
+        "--lora-target-modules",
+        type=str,
+        nargs="+",
+        default=None,
+        help="Explicit list of LoRA target module names. If set, overrides --apply-classhead-lora / "
+             "--apply-qkv-head-lora and the default ['q_proj','v_proj']. "
+             "Example: --lora-target-modules q_proj k_proj v_proj o_proj",
+    )
+
+    # --- asymmetric-duos integration (ib_edl) -----------------------------
+    parser.add_argument(
+        "--model-role",
+        type=str,
+        default=None,
+        choices=[None, "base", "sidekick"],
+        help="Role of this model in the asymmetric-duos pipeline. Used to route prediction dumps "
+             "to $RESULTS_ROOT/blob/<role>/{val_preds,test_preds}/<dataset>.npz.",
+    )
+    parser.add_argument(
+        "--results-root",
+        type=str,
+        default=None,
+        help="Root directory for asymmetric-duos-compatible prediction dumps (typically $HOME/results). "
+             "When set together with --model-role, per-sample logits are saved as "
+             "<results-root>/blob/<role>/{val_preds,test_preds}/<dataset>.npz.",
+    )
+    parser.add_argument(
+        "--dump-val-predictions",
+        action="store_true",
+        help="Also evaluate on the validation split and dump per-sample logits. "
+             "Required for downstream duo optimisation in the asymmetric-duos repo.",
+    )
 
 
 def add_management_args(parser: ArgumentParser) -> None:
