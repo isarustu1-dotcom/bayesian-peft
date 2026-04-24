@@ -59,6 +59,7 @@ for ROLE in base sidekick; do
             --model-role "$ROLE" \
             --results-root "$RESULTS_ROOT" \
             --dump-val-predictions \
+            --nowand \
             --wandb-name "$NAME" --wandb-project "BLoB-qwen2-asymmetric-duos" \
             --log-path "$NAME"
         echo "[BLoB $DATASET] role=$ROLE seed=$SEED — done."
