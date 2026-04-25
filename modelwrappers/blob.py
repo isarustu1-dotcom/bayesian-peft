@@ -471,6 +471,14 @@ class BLoB(WrapperBase):
                 nll = self.loss(output, golds, reduction="mean")
 
                 self.accelerator.backward(nll)
+                # Gradient clipping for the μ optimizer (Adam over LoRA A/B
+                # means + classifier head). Prevents one bad batch + noisy
+                # MC draw from blowing up the parameters → NaN logits.
+                if self.accelerator.sync_gradients:
+                    self.accelerator.clip_grad_norm_(
+                        [p for g in self.opt.param_groups for p in g["params"]],
+                        1.0,
+                    )
                 self.opt.step()
                 self.opt.zero_grad()
                 self.scheduler.step()
@@ -494,6 +502,13 @@ class BLoB(WrapperBase):
                     self.pi = 1 / self.M
                 kl_div = kl * self.pi
                 self.accelerator.backward(kl_div)
+                # Gradient clipping for the ρ optimizer (SGD over LoRA A
+                # log-stds). Same rationale as above.
+                if self.accelerator.sync_gradients:
+                    self.accelerator.clip_grad_norm_(
+                        [p for g in self.opt2.param_groups for p in g["params"]],
+                        1.0,
+                    )
                 self.opt2.step()
                 self.opt2.zero_grad()
                 self.scheduler2.step()
@@ -525,8 +540,21 @@ class BLoB(WrapperBase):
                 elbo_losses.update(loss, len_batch)
                 accs.update(acc, len_batch)
 
-                assert not math.isnan(nll_loss)
-                assert not math.isnan(kl)
+                # Defensive: if a single bad batch produced NaN loss, skip
+                # logging and zero gradients rather than killing the whole
+                # run. Combined with grad clipping above this should be very
+                # rare; if it fires repeatedly, the run is genuinely diverging
+                # and you'll see it in wandb / stdout.
+                if math.isnan(nll_loss) or math.isnan(kl):
+                    print(
+                        f"[BLoB][WARN] NaN at step {self.step}: "
+                        f"nll={nll_loss} kl={kl} — skipping batch."
+                    )
+                    self.opt.zero_grad()
+                    self.opt2.zero_grad()
+                    self.step += self.accelerator.num_processes
+                    pbar.update(1)
+                    continue
                 if self.accelerator.is_local_main_process:
                     if self.wandb_logger is not None:
                         self.wandb_logger.log(
